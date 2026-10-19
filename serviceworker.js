@@ -1,4 +1,5 @@
-const CACHE_NAME = "dev-coffee-v2";
+
+const CACHE_NAME = "pokedex-v1";
 
 const archivos = [
     "./",
@@ -10,65 +11,81 @@ const archivos = [
     "./js/detalle.js"
 ];
 
-// 1. Instalación (Precarga de Shell/Estáticos)
 self.addEventListener("install", event => {
+
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => cache.addAll(archivos))
     );
+
+    self.skipWaiting();
 });
 
-// 2. Activación (Limpieza de cachés obsoletas)
 self.addEventListener("activate", event => {
+
     event.waitUntil(
-        caches.keys().then(cacheNames => {
+        caches.keys().then(nombres => {
             return Promise.all(
-                cacheNames.map(cacheName => {
-                    if (cacheName !== CACHE_NAME) {
-                        return caches.delete(cacheName);
+                nombres.map(nombre => {
+                    if (nombre !== CACHE_NAME) {
+                        return caches.delete(nombre);
                     }
                 })
             );
         })
     );
+
+    self.clients.claim();
 });
 
-// 3. Manejo de peticiones con Cache First y Network First
 self.addEventListener("fetch", event => {
+
     const url = new URL(event.request.url);
 
-    // ESTRATEGIA 1: Network First (para APIs o datos dinámicos)
-    if (url.pathname.includes("/api/") || event.request.headers.get("accept")?.includes("application/json")) {
-        event.respondWith(
-            fetch(event.request)
-                .then(networkResponse => {
-                    // Opcional: Guardar copia actualizada en caché
-                    if (networkResponse.ok) {
-                        const responseClone = networkResponse.clone();
-                        caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
-                    }
-                    return networkResponse;
-                })
-                .catch(() => caches.match(event.request)) // Fallback a caché si falla la red
-        );
+    // Las consultas a la API siempre intentan ir a Internet.
+    if (url.hostname === "pokeapi.co") {
         return;
     }
 
-    // ESTRATEGIA 2: Cache First (para recursos estáticos / App Shell)
+    // Solo manejamos las solicitudes de la misma página.
+    if (url.origin !== self.location.origin) {
+        return;
+    }
+
+    if (event.request.method !== "GET") {
+        return;
+    }
+
     event.respondWith(
-        caches.match(event.request)
-            .then(cachedResponse => {
-                if (cachedResponse) {
-                    return cachedResponse; // Retorna desde caché si existe
+        fetch(event.request)
+            .then(respuesta => {
+
+                if (respuesta.ok) {
+                    const copia = respuesta.clone();
+
+                    caches.open(CACHE_NAME)
+                        .then(cache => cache.put(event.request, copia));
                 }
-                // Si no está en caché, lo busca en la red
-                return fetch(event.request).then(networkResponse => {
-                    if (networkResponse.ok && event.request.method === "GET") {
-                        const responseClone = networkResponse.clone();
-                        caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
+
+                return respuesta;
+            })
+            .catch(async () => {
+
+                const guardada = await caches.match(event.request);
+
+                if (guardada) {
+                    return guardada;
+                }
+
+                return new Response(
+                    "No hay conexión y este recurso no está guardado.",
+                    {
+                        status: 503,
+                        headers: {
+                            "Content-Type": "text/plain; charset=utf-8"
+                        }
                     }
-                    return networkResponse;
-                });
+                );
             })
     );
 });
